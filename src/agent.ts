@@ -7,6 +7,7 @@ import {
   getCurrentWeekStart,
   savePlan,
   getLatestPlan,
+  getRecentChatContent,
   type WorkoutLog,
   type UserProfile,
 } from "./db.js";
@@ -80,6 +81,16 @@ const tools = [
     },
   },
   {
+    name: "get_chat_insights",
+    description:
+      "Retrieve recent messages the athlete wrote to their coach in past conversations. Use this to find stated preferences, goals, complaints, or special requests (e.g. 'I want more leg work', 'skip cardio this week', 'focus on powerlifting'). Always call this before generating the plan.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
     name: "save_weekly_plan",
     description:
       "Save the generated weekly training plan to the database. Call this after finalizing the plan JSON.",
@@ -140,6 +151,10 @@ function executeTool(
       };
     }
 
+    case "get_chat_insights": {
+      return getRecentChatContent(40);
+    }
+
     case "save_weekly_plan": {
       const { weekStart, plan, analysis } = input as {
         weekStart: string;
@@ -164,59 +179,81 @@ function executeTool(
 // System prompt
 // ---------------------------------------------------------------------------
 
-function buildSystemPrompt(): string {
+function buildSystemPrompt(overrideInstructions?: string): string {
   const nextMonday = getCurrentWeekStart();
   // Actually we want next week's Monday
   const d = new Date(nextMonday);
   d.setDate(d.getDate() + 7);
   const upcomingWeek = d.toISOString().slice(0, 10);
 
-  return `You are an expert personal trainer and sports coach AI. Your job is to:
-1. Analyze the athlete's performance from the past week
-2. Generate a structured, progressive weekly training plan for the upcoming week
+  const profile = getProfile();
+  const customInstructions = overrideInstructions ?? profile.custom_plan_instructions ?? "";
+
+  return `You are an expert personal trainer and sports coach AI. Your job is to synthesize every available data source — athlete profile, workout history, previous plans, stated preferences, and current training science — into the best possible weekly training plan.
 
 Today is ${new Date().toISOString().slice(0, 10)}. The upcoming week starts on ${upcomingWeek}.
 
-## Workflow (follow this exactly)
-1. Call get_user_profile to understand the athlete
-2. Call get_last_week_logs to review their recent training
-3. Call get_previous_plan to see what was planned before
-4. Analyze performance: compare planned vs actual, note RPE trends, missed sessions, PRs, fatigue signals
-5. Generate the new weekly plan as a JSON object matching this exact schema:
-   {
-     weekOf: string (ISO Monday date),
-     summary: string (2-3 sentences: what went well, what struggled, overall readiness),
-     adjustments: string[] (bullet reasons for changes from last week),
-     days: Array of {
-       day: "Mon"|"Tue"|"Wed"|"Thu"|"Fri"|"Sat"|"Sun",
-       type: "strength"|"cardio"|"mobility"|"rest",
-       focus: string (e.g. "Upper body push", "Zone 2 cardio"),
-       exercises: Array of {
-         name: string,
-         sets: number,
-         reps: string (e.g. "8-10", "AMRAP", "45s"),
-         targetWeight?: string (e.g. "RPE 7", "80kg", "70% 1RM"),
-         notes?: string
-       }
-     },
-     weeklyGoal: string (one sentence priority for the week)
-   }
-6. Call save_weekly_plan with the plan, the weekStart date, and your analysis text
+## Workflow
 
-## Web Search
-Use web_search when you need current, specific information beyond your training knowledge:
-- Unfamiliar exercises or techniques the athlete mentions in their logs
-- Evidence-based recommendations for a specific injury or limitation in the profile
-- Current best practices for a particular training style (e.g. "HYROX prep", "powerlifting peaking block")
-- Optimal rep ranges or periodization schemes for the athlete's specific goal
-Keep searches concise and targeted. Do not search for general fitness basics you already know well.
+### Step 1 — Gather all data in parallel (one turn, multiple tool calls)
+Call ALL FOUR of these tools simultaneously in your first response:
+- get_user_profile — goals, fitness level, equipment, injuries, training days
+- get_last_week_logs — what was actually done, RPE, duration, notes
+- get_previous_plan — last plan to enable progressive overload
+- get_chat_insights — explicit preferences, events, constraints the athlete has mentioned
+
+### Step 2 — Web research (always required)
+After reviewing the data, use web_search to look up current, evidence-based information relevant to THIS athlete. Always search for at least one of:
+- Best practices for their specific event or goal (e.g. "Hyrox 8-week prep block", "powerlifting peak week protocol")
+- Optimal progression schemes for their current training phase (e.g. "intermediate strength periodization RPE")
+- Exercise substitutions or technique details for anything in their history or custom instructions
+- Recovery or injury management if they have notes about pain or fatigue
+
+Do not skip web research. Even for standard goals, look up one current best-practice reference to ensure the plan is based on up-to-date methods.
+
+### Step 3 — Synthesize everything
+Before writing the plan, mentally integrate:
+- Profile: what constraints and goals bound the plan
+- Logs: what actually happened last week (adherence, fatigue, performance)
+- Previous plan: what changed vs what was planned, and why
+- Chat insights: any explicit requests or event-specific context
+- Web research: current best practices for their goal
+- Custom instructions (if any): standing overrides that always apply
+
+### Step 4 — Generate the plan
+Produce a JSON object matching this exact schema:
+{
+  weekOf: string (ISO Monday date),
+  summary: string (2-3 sentences: what the data tells you about their current state),
+  adjustments: string[] (what changed vs last week and why — cite specific data),
+  days: Array of {
+    day: "Mon"|"Tue"|"Wed"|"Thu"|"Fri"|"Sat"|"Sun",
+    type: "strength"|"cardio"|"mobility"|"rest",
+    focus: string (e.g. "Upper body push", "Zone 2 cardio"),
+    exercises: Array of {
+      name: string,
+      sets: number,
+      reps: string (e.g. "8-10", "AMRAP", "45s"),
+      targetWeight?: string (e.g. "RPE 7", "80kg", "70% 1RM"),
+      notes?: string
+    }
+  },
+  weeklyGoal: string (one sentence priority for the week)
+}
+
+### Step 5 — Save
+Call save_weekly_plan with the plan, weekStart date, and a 2-4 sentence performance analysis.
 
 ## Rules
-- Always include exactly 7 days (Mon-Sun), using type "rest" for recovery days
-- Apply progressive overload: slightly increase volume or intensity vs last week if performance was good
-- If athlete missed sessions or had high RPE, reduce load or add recovery
-- Keep the same structural format every single week — consistency matters
-- Rest days should have type "rest" and an empty exercises array`;
+- Always include exactly 7 days (Mon–Sun), using type "rest" for off days
+- Apply progressive overload when last week's performance was good (RPE ≤ 7, full adherence)
+- Reduce load or add recovery if: missed sessions, RPE ≥ 9, injury notes, or fatigue signals
+- Rest days have type "rest" and an empty exercises array
+- The adjustments array must be specific — cite actual log data, not generic platitudes${
+    customInstructions
+      ? `\n\n## Athlete's custom instructions (always follow these)\n${customInstructions}`
+      : ""
+  }`;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +262,7 @@ Keep searches concise and targeted. Do not search for general fitness basics you
 
 const client = new Anthropic();
 
-export async function runWeeklyAgentWorkflow(): Promise<WeeklyPlan> {
+export async function runWeeklyAgentWorkflow(overrideInstructions?: string): Promise<WeeklyPlan> {
   console.log("[Agent] Starting weekly plan generation...");
 
   const messages: Anthropic.MessageParam[] = [
@@ -240,8 +277,8 @@ export async function runWeeklyAgentWorkflow(): Promise<WeeklyPlan> {
   while (true) {
     const response = await client.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 4096,
-      system: buildSystemPrompt(),
+      max_tokens: 8192,
+      system: buildSystemPrompt(overrideInstructions),
       tools,
       messages,
     });
@@ -267,6 +304,9 @@ export async function runWeeklyAgentWorkflow(): Promise<WeeklyPlan> {
 
     for (const block of response.content) {
       if (block.type !== "tool_use") continue;
+      // web_search is server-side — Anthropic executes it transparently,
+      // no client-provided tool_result needed or expected.
+      if (block.name === "web_search") continue;
 
       console.log(`[Agent] Tool call: ${block.name}`);
       const result = executeTool(block.name, block.input as Record<string, unknown>);
@@ -294,6 +334,6 @@ export async function runWeeklyAgentWorkflow(): Promise<WeeklyPlan> {
 // Manual trigger (for testing without the scheduler)
 // ---------------------------------------------------------------------------
 
-export async function generatePlanNow(): Promise<WeeklyPlan> {
-  return runWeeklyAgentWorkflow();
+export async function generatePlanNow(overrideInstructions?: string): Promise<WeeklyPlan> {
+  return runWeeklyAgentWorkflow(overrideInstructions);
 }

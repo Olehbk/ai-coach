@@ -17,6 +17,9 @@ export interface UserProfile {
   equipment: string; // JSON array of strings
   injuries: string; // plain text notes
   days_per_week: number;
+  custom_plan_instructions: string; // extra instructions always applied when generating plans
+  email_schedule: string; // cron expression for weekly email delivery
+  email_enabled: number; // 0 = off, 1 = on
   created_at: string;
   updated_at: string;
 }
@@ -50,6 +53,21 @@ export interface WeeklyPlan {
   created_at: string;
 }
 
+export interface ChatSession {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbChatMessage {
+  id: number;
+  session_id: number;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
 // ---------------------------------------------------------------------------
 // DB setup
 // ---------------------------------------------------------------------------
@@ -71,6 +89,18 @@ export function getDb(): Database.Database {
 
   initSchema(_db);
   return _db;
+}
+
+function addColumnIfMissing(
+  db: Database.Database,
+  table: string,
+  column: string,
+  definition: string
+): void {
+  const cols = db.pragma(`table_info(${table})`) as { name: string }[];
+  if (!cols.find((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }
 
 function initSchema(db: Database.Database): void {
@@ -107,7 +137,27 @@ function initSchema(db: Database.Database): void {
       performance_analysis  TEXT    NOT NULL DEFAULT '',
       created_at            TEXT    NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      title      TEXT    NOT NULL DEFAULT 'New conversation',
+      created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      role       TEXT    NOT NULL CHECK(role IN ('user', 'assistant')),
+      content    TEXT    NOT NULL,
+      created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
   `);
+
+  // Migrate: add new columns to existing installs
+  addColumnIfMissing(db, "user_profile", "custom_plan_instructions", "TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(db, "user_profile", "email_schedule", "TEXT NOT NULL DEFAULT '0 8 * * 0'");
+  addColumnIfMissing(db, "user_profile", "email_enabled", "INTEGER NOT NULL DEFAULT 1");
 
   // Seed a default profile if none exists
   const count = (
@@ -154,6 +204,9 @@ export function updateProfile(
     "equipment",
     "injuries",
     "days_per_week",
+    "custom_plan_instructions",
+    "email_schedule",
+    "email_enabled",
   ] as const;
 
   const updates: string[] = [];
@@ -325,4 +378,100 @@ export function getPreviousWeekStart(): string {
   const prev = new Date(thisMonday);
   prev.setDate(prev.getDate() - 7);
   return prev.toISOString().slice(0, 10);
+}
+
+// ---------------------------------------------------------------------------
+// Chat session queries
+// ---------------------------------------------------------------------------
+
+export function createChatSession(title = "New conversation"): ChatSession {
+  const db = getDb();
+  const result = db
+    .prepare("INSERT INTO chat_sessions (title) VALUES (?)")
+    .run(title);
+  return db
+    .prepare("SELECT * FROM chat_sessions WHERE id = ?")
+    .get(result.lastInsertRowid) as ChatSession;
+}
+
+export function listChatSessions(): ChatSession[] {
+  const db = getDb();
+  return db
+    .prepare("SELECT * FROM chat_sessions ORDER BY updated_at DESC")
+    .all() as ChatSession[];
+}
+
+export function getChatSession(id: number): ChatSession | undefined {
+  const db = getDb();
+  return db
+    .prepare("SELECT * FROM chat_sessions WHERE id = ?")
+    .get(id) as ChatSession | undefined;
+}
+
+export function updateChatSessionTitle(id: number, title: string): void {
+  const db = getDb();
+  db.prepare(
+    "UPDATE chat_sessions SET title = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(title, id);
+}
+
+export function touchChatSession(id: number): void {
+  const db = getDb();
+  db.prepare(
+    "UPDATE chat_sessions SET updated_at = datetime('now') WHERE id = ?"
+  ).run(id);
+}
+
+export function deleteChatSession(id: number): void {
+  const db = getDb();
+  db.prepare("DELETE FROM chat_sessions WHERE id = ?").run(id);
+}
+
+// ---------------------------------------------------------------------------
+// Chat message queries
+// ---------------------------------------------------------------------------
+
+export function addChatMessage(
+  sessionId: number,
+  role: "user" | "assistant",
+  content: string
+): void {
+  const db = getDb();
+  db.prepare(
+    "INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)"
+  ).run(sessionId, role, content);
+  touchChatSession(sessionId);
+}
+
+export function getChatMessages(sessionId: number): DbChatMessage[] {
+  const db = getDb();
+  return db
+    .prepare(
+      "SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC"
+    )
+    .all(sessionId) as DbChatMessage[];
+}
+
+/**
+ * Returns recent user messages from all chat sessions as a plain-text block
+ * so the plan agent can reference stated preferences and constraints.
+ */
+export function getRecentChatContent(limitMessages = 40): string {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT cm.content, cm.created_at
+       FROM chat_messages cm
+       WHERE cm.role = 'user'
+       ORDER BY cm.created_at DESC
+       LIMIT ?`
+    )
+    .all(limitMessages) as { content: string; created_at: string }[];
+
+  if (rows.length === 0) return "No chat history available.";
+
+  return rows
+    .reverse()
+    .map((r) => `[${r.created_at.slice(0, 10)}] ${r.content}`)
+    .join("\n");
 }

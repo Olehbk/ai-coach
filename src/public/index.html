@@ -215,6 +215,135 @@
       color: var(--muted);
     }
     .empty-state p { margin-top: 0.5rem; font-size: 0.9rem; }
+
+    /* ---- Chat layout ---- */
+    .chat-layout {
+      display: flex;
+      height: calc(100vh - 14rem);
+      min-height: 420px;
+      gap: 0;
+    }
+    /* Sidebar */
+    .chat-sidebar {
+      width: 210px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      border-right: 1px solid var(--border);
+      padding-right: 1rem;
+    }
+    .session-list {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .session-item {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.45rem 0.6rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.82rem;
+      color: var(--muted);
+      transition: background 0.1s, color 0.1s;
+      user-select: none;
+    }
+    .session-item:hover { background: var(--border); color: var(--text); }
+    .session-item.active { background: rgba(108,99,255,0.15); color: var(--accent); }
+    .session-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-del {
+      opacity: 0;
+      background: none;
+      border: none;
+      color: var(--danger);
+      cursor: pointer;
+      font-size: 0.8rem;
+      padding: 0.1rem 0.3rem;
+      border-radius: 4px;
+      line-height: 1;
+    }
+    .session-item:hover .session-del { opacity: 1; }
+    /* Main chat area */
+    .chat-main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding-left: 1.25rem;
+      min-width: 0;
+    }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      padding: 0.25rem 0 0.5rem;
+    }
+    .chat-bubble-row { display: flex; }
+    .chat-bubble-row.user  { justify-content: flex-end; }
+    .chat-bubble-row.assistant { justify-content: flex-start; }
+    .chat-bubble {
+      max-width: 78%;
+      padding: 0.7rem 1rem;
+      border-radius: 14px;
+      font-size: 0.9rem;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .chat-bubble.user {
+      background: var(--accent);
+      color: #fff;
+      border-bottom-right-radius: 3px;
+    }
+    .chat-bubble.assistant {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-bottom-left-radius: 3px;
+    }
+    .chat-bubble.typing { color: var(--muted); font-style: italic; }
+    .chat-input-row {
+      display: flex;
+      gap: 0.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      margin-top: 0.75rem;
+    }
+    .chat-input-row textarea {
+      flex: 1;
+      min-height: 2.6rem;
+      max-height: 8rem;
+      resize: none;
+    }
+    .chat-empty {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      text-align: center;
+      gap: 0.5rem;
+      padding: 2rem;
+    }
+    .chat-empty .icon { font-size: 2.5rem; }
+    .chat-empty .hints { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.4rem; align-items: stretch; max-width: 340px; }
+    .chat-hint {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.5rem 1rem;
+      font-size: 0.82rem;
+      cursor: pointer;
+      transition: border-color 0.15s;
+      text-align: left;
+    }
+    .chat-hint:hover { border-color: var(--accent); color: var(--text); }
   </style>
 </head>
 <body>
@@ -229,6 +358,7 @@
   <button onclick="showPanel('history')">History</button>
   <button onclick="showPanel('plan')">This Week's Plan</button>
   <button onclick="showPanel('profile')">Profile</button>
+  <button onclick="showPanel('chat')">Coach Chat</button>
 </nav>
 
 <!-- ======================================================= LOG WORKOUT -->
@@ -332,6 +462,39 @@
   </div>
 </div>
 
+<!-- ======================================================= CHAT -->
+<div id="panel-chat" class="panel">
+  <div class="card chat-layout">
+
+    <!-- Sidebar: session list -->
+    <div class="chat-sidebar">
+      <button class="btn primary" style="font-size:0.85rem;padding:0.5rem" onclick="newChatSession()">+ New chat</button>
+      <div class="session-list" id="session-list"></div>
+    </div>
+
+    <!-- Main area -->
+    <div class="chat-main">
+      <div class="chat-messages" id="chat-messages">
+        <div class="chat-empty" id="chat-empty">
+          <div class="icon">💬</div>
+          <p>Chat with your coach to customize your training or set up email delivery.</p>
+          <div class="hints">
+            <div class="chat-hint" onclick="prefill('Build my plan focused on strength and powerlifting')">Build my plan focused on strength &amp; powerlifting</div>
+            <div class="chat-hint" onclick="prefill('I want less cardio and more hypertrophy work')">Less cardio, more hypertrophy</div>
+            <div class="chat-hint" onclick="prefill('Send me my weekly plan every Sunday at 8am')">Send my plan every Sunday at 8am</div>
+            <div class="chat-hint" onclick="prefill('What does my current plan look like?')">What does my current plan look like?</div>
+          </div>
+        </div>
+      </div>
+      <div class="chat-input-row">
+        <textarea id="chat-input" placeholder="Ask your coach anything… (Enter to send, Shift+Enter for newline)" rows="2"></textarea>
+        <button class="btn primary" id="chat-send" onclick="sendChat()">Send</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -363,6 +526,7 @@
     if (name === 'history') loadHistory();
     if (name === 'plan') loadPlan();
     if (name === 'profile') loadProfile();
+    if (name === 'chat') initChat();
   }
 
   function rpeColor(rpe) {
@@ -581,6 +745,210 @@
 
   // Pre-populate one exercise row
   addExerciseRow();
+
+  // ---- Chat panel ----
+  let currentSessionId = null;
+  let currentMessages = []; // local display copy (includes typing indicator)
+  let chatSessions = [];
+  let chatInitialized = false;
+
+  function escapeHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function relativeDate(iso) {
+    const d = new Date(iso);
+    const now = new Date();
+    const diff = Math.floor((now - d) / 86400000);
+    if (diff === 0) return 'Today';
+    if (diff === 1) return 'Yesterday';
+    if (diff < 7) return `${diff}d ago`;
+    return d.toLocaleDateString(undefined, { month:'short', day:'numeric' });
+  }
+
+  function renderSessionList() {
+    const list = document.getElementById('session-list');
+    if (chatSessions.length === 0) {
+      list.innerHTML = '<div style="font-size:0.8rem;color:var(--muted);padding:0.5rem 0.6rem">No conversations yet</div>';
+      return;
+    }
+    list.innerHTML = chatSessions.map(s => `
+      <div class="session-item${s.id === currentSessionId ? ' active' : ''}" onclick="selectSession(${s.id})">
+        <span class="session-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</span>
+        <span style="font-size:0.72rem;color:var(--muted);flex-shrink:0">${relativeDate(s.updated_at)}</span>
+        <button class="session-del" onclick="deleteSession(event,${s.id})" title="Delete">✕</button>
+      </div>`).join('');
+  }
+
+  function renderMessages() {
+    const container = document.getElementById('chat-messages');
+    const empty = document.getElementById('chat-empty');
+    if (currentMessages.length === 0) {
+      empty.style.display = 'flex';
+      [...container.querySelectorAll('.chat-bubble-row')].forEach(el => el.remove());
+      return;
+    }
+    empty.style.display = 'none';
+    [...container.querySelectorAll('.chat-bubble-row')].forEach(el => el.remove());
+    for (const msg of currentMessages) {
+      const row = document.createElement('div');
+      row.className = `chat-bubble-row ${msg.role}`;
+      const bubble = document.createElement('div');
+      bubble.className = `chat-bubble ${msg.role}${msg.typing ? ' typing' : ''}`;
+      bubble.textContent = msg.content;
+      row.appendChild(bubble);
+      container.appendChild(row);
+    }
+    container.scrollTop = container.scrollHeight;
+  }
+
+  async function initChat() {
+    if (chatInitialized) { renderSessionList(); renderMessages(); return; }
+    chatInitialized = true;
+    try {
+      chatSessions = await api('/api/chat/sessions');
+      // Always start fresh — old sessions are accessible in the sidebar
+      currentSessionId = null;
+      currentMessages = [];
+      renderSessionList();
+      renderMessages();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  async function selectSession(id) {
+    try {
+      const data = await api(`/api/chat/sessions/${id}`);
+      currentSessionId = id;
+      currentMessages = data.messages.map(m => ({ role: m.role, content: m.content }));
+      renderSessionList();
+      renderMessages();
+      document.getElementById('chat-input').focus();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  async function newChatSession() {
+    try {
+      const session = await api('/api/chat/sessions', { method: 'POST' });
+      chatSessions.unshift(session);
+      currentSessionId = session.id;
+      currentMessages = [];
+      renderSessionList();
+      renderMessages();
+      document.getElementById('chat-input').focus();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  async function deleteSession(evt, id) {
+    evt.stopPropagation();
+    try {
+      await fetch(`/api/chat/sessions/${id}`, { method: 'DELETE' });
+      chatSessions = chatSessions.filter(s => s.id !== id);
+      if (currentSessionId === id) {
+        currentSessionId = null;
+        currentMessages = [];
+      }
+      renderSessionList();
+      renderMessages();
+      if (!currentSessionId && chatSessions.length > 0) {
+        await selectSession(chatSessions[0].id);
+      }
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  function prefill(text) {
+    document.getElementById('chat-input').value = text;
+    document.getElementById('chat-input').focus();
+  }
+
+  async function sendChat() {
+    const input = document.getElementById('chat-input');
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = '';
+
+    const sendBtn = document.getElementById('chat-send');
+    sendBtn.disabled = true;
+    input.disabled = true;
+
+    // If no session yet, create one silently
+    if (!currentSessionId) {
+      try {
+        const session = await api('/api/chat/sessions', { method: 'POST' });
+        chatSessions.unshift(session);
+        currentSessionId = session.id;
+      } catch (e) {
+        toast(e.message, 'error');
+        sendBtn.disabled = false;
+        input.disabled = false;
+        return;
+      }
+    }
+
+    currentMessages.push({ role: 'user', content: msg });
+    currentMessages.push({ role: 'assistant', content: 'Thinking…', typing: true });
+    renderMessages();
+
+    const slowWarning = setTimeout(() => {
+      const last = currentMessages[currentMessages.length - 1];
+      if (last && last.typing) {
+        last.content = 'Working on it… plan generation can take ~30 seconds.';
+        renderMessages();
+      }
+    }, 6000);
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, sessionId: currentSessionId }),
+      });
+      clearTimeout(slowWarning);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || res.statusText);
+      }
+      const data = await res.json();
+
+      currentMessages.pop(); // remove typing indicator
+      currentMessages.push({ role: 'assistant', content: data.reply });
+      renderMessages();
+
+      // Update session title in sidebar
+      const idx = chatSessions.findIndex(s => s.id === currentSessionId);
+      if (idx >= 0) {
+        chatSessions[idx].title = data.sessionTitle;
+        chatSessions[idx].updated_at = new Date().toISOString();
+        // Keep sorted newest-first
+        const [s] = chatSessions.splice(idx, 1);
+        chatSessions.unshift(s);
+        renderSessionList();
+      }
+    } catch (e) {
+      clearTimeout(slowWarning);
+      currentMessages.pop();
+      currentMessages.push({ role: 'assistant', content: `Sorry, something went wrong: ${e.message}` });
+      renderMessages();
+    } finally {
+      sendBtn.disabled = false;
+      input.disabled = false;
+      input.focus();
+    }
+  }
+
+  document.getElementById('chat-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChat();
+    }
+  });
 </script>
 </body>
 </html>

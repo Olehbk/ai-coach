@@ -1,15 +1,21 @@
 import cron from "node-cron";
 import { runWeeklyAgentWorkflow } from "./agent.js";
 import { sendPlanEmail } from "./notifier.js";
-import { getLatestPlan } from "./db.js";
+import { getLatestPlan, getProfile } from "./db.js";
 import type { WeeklyPlan } from "./agent.js";
 
 // ---------------------------------------------------------------------------
-// Full Sunday workflow: analyze → generate → email
+// Full workflow: analyze → generate → email
 // ---------------------------------------------------------------------------
 
 async function runSundayWorkflow(): Promise<void> {
-  console.log("[Scheduler] Sunday workflow started");
+  console.log("[Scheduler] Workflow started");
+
+  const profile = getProfile();
+  if (!profile.email_enabled) {
+    console.log("[Scheduler] Email delivery disabled — skipping");
+    return;
+  }
 
   let plan: WeeklyPlan;
 
@@ -42,23 +48,48 @@ async function runSundayWorkflow(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Active task — kept so we can cancel and replace it
+// ---------------------------------------------------------------------------
+
+let activeTask: ReturnType<typeof cron.schedule> | null = null;
+
+// ---------------------------------------------------------------------------
 // Cron schedule
 //
 //   "0 8 * * 0"  →  08:00 every Sunday
 //
-// Override via SCHEDULE_CRON env var for testing, e.g.:
-//   SCHEDULE_CRON="* * * * *"  (every minute — dev only)
+// Priority: SCHEDULE_CRON env var → DB profile email_schedule → default
 // ---------------------------------------------------------------------------
 
 export function startScheduler(): void {
-  const expression = process.env["SCHEDULE_CRON"] ?? "0 8 * * 0";
+  const profile = getProfile();
+  const expression =
+    process.env["SCHEDULE_CRON"] ?? profile.email_schedule ?? "0 8 * * 0";
+
+  rescheduleTask(expression);
+}
+
+/**
+ * Replace the running cron task with a new one.
+ * Pass null to disable scheduling entirely.
+ */
+export function rescheduleTask(expression: string | null): void {
+  if (activeTask) {
+    activeTask.stop();
+    activeTask = null;
+  }
+
+  if (!expression) {
+    console.log("[Scheduler] Scheduling disabled");
+    return;
+  }
 
   if (!cron.validate(expression)) {
     console.error(`[Scheduler] Invalid cron expression: "${expression}"`);
     return;
   }
 
-  cron.schedule(expression, () => {
+  activeTask = cron.schedule(expression, () => {
     void runSundayWorkflow();
   });
 
